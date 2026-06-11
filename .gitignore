@@ -1,3 +1,5 @@
-test.ipynb
-.ipynb_checkpoints/
+/Data
 /tmp
+
+.ipynb_checkpoints/
+
