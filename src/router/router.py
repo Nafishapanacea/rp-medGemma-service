@@ -7,8 +7,8 @@ import shutil
 from zipfile import ZipFile
 from fastapi.responses import JSONResponse
 
-from src.configuration.prompt import x_ray_prompt
-from utils.utils import dicom_to_image, run_medgemma
+from utils.prompt import x_ray_prompt, mri_prompt, ct_prompt
+from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct
 
 router = APIRouter()
 
@@ -38,22 +38,50 @@ async def predict(
         file_paths  = glob.glob(root_dir_path + "/**/*.dcm", recursive=True)
         file_paths += glob.glob(os.path.join(temp_dir, "**", "*.dicom"), recursive=True)
 
+        # print("files paths:- ", file_paths)
+
         if not file_paths:
             return JSONResponse(
                 status_code=400,
                 content={"error": "No .dcm file found inside the ZIP."}
             )
 
-        dicom_path  = file_paths[0]
-        print("DICOM FILE:", dicom_path)
-        output_path = os.path.splitext(dicom_path)[0] + ".png"
+        modality = check_modality(file_paths[0])
+        print("Modality is :- ", modality)
 
-        # ── 4. DICOM → PNG ───────────────────────────────────────────────
-        dicom_to_image(dicom_path, output_path, format="png")
+        if (modality =='CR'):
+            dicom_path  = file_paths[0]
+            output_path = os.path.splitext(dicom_path)[0] + ".png"
+    
+            # ── 4. DICOM → PNG ───────────────────────────────────────────────
+            dicom_to_image(dicom_path, output_path, format="png")
+    
+            # ── 5. call model ───────────────────────────────────────────────
+            response = run_medgemma_xray(output_path, x_ray_prompt)
+            print(response)
+    
 
-        # ── 5. call model ───────────────────────────────────────────────
-        response = run_medgemma(output_path, x_ray_prompt)
-        print(response)
+        elif (modality =='MR'):
+            # print(mri_prompt)
+            message = prepare_message_mr(file_paths, mri_prompt)
+            print(os.path.exists(file_paths[0]))
+            # print(message)
+            print("in main and msg is prepared")
+            model_response = run_medgemma_mr(message)
+            # print(model_response)
+            response = {'finding': model_response}
+            
+        elif (modality =='CT'):
+            message = prepare_message_ct(file_paths, ct_prompt)
+            print(os.path.exists(file_paths[0]))
+            # print(message)
+            print("in main and msg is prepared")
+            model_response = run_medgemma_ct(message)
+            # print(model_response)
+            response = {'finding': model_response}
+            
+        else:
+            response = {'finding':'Modality not supported'}
 
         # ── 6. Save finding to predictions.json ──────────────────────────
         temp_dir_return = tempfile.mkdtemp(dir=DICOM_TEMP_PATH)
