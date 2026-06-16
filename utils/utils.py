@@ -151,6 +151,167 @@ def run_medgemma_mr(message):
     return response
 
 
+ 
+ABNORMALITY_MAP_MR = {
+    "Lesion": r"\blesion\b",
+    "Mass": r"\bmass\b",
+    "Tumor": r"\btumou?r\b",
+    "Metastasis": r"\bmetastasis\b",
+    "Hemorrhage": r"\bhemorrhage\b",
+    "Infarct": r"\binfarct(?:ion)?\b",
+    "Edema": r"\bedema\b",
+    "Hydrocephalus": r"\bhydrocephalus\b",
+    "White Matter Abnormality": r"\bwhite matter abnormalit",
+    "Extra-axial Lesion": r"\bextra[- ]axial\b",
+    "Vascular Abnormality": r"\bvascular abnormalit",
+    "Postoperative Change": r"\bpostoperative change",
+    "Atrophy": r"\batrophy\b",
+    "Signal Abnormality": r"\bsignal abnormalit",
+    "Midline Shift": r"\bmidline shift\b",
+    "Mass Effect": r"\bmass effect\b",
+    "Cystic Lesion": r"\bcyst(?:ic)? lesion\b|\bcyst\b",
+    "Encephalomalacia": r"\bencephalomalacia\b",
+    "Demyelinating Disease": r"\bdemyelinating\b",
+    "Calcification": r"\bcalcification\b",
+    "Skull Fracture": r"\bskull fracture\b"
+}
+
+ABNORMALITY_MAP_CT = {
+    "Lesion": r"\blesion\b",
+    "Mass": r"\bmass\b",
+    "Tumor": r"\btumou?r\b",
+    "Hemorrhage": r"\bhemorrhage\b",
+    "Infarct": r"\binfarct(?:ion)?\b",
+    "Edema": r"\bedema\b",
+    "Hydrocephalus": r"\bhydrocephalus\b",
+    "White Matter Abnormality": r"\bwhite matter abnormalit",
+    "Extra-axial Lesion": r"\bextra[- ]axial\b",
+    "Vascular Abnormality": r"\bvascular abnormalit",
+    "Postoperative Change": r"\bpostoperative change",
+    "Atrophy": r"\batrophy\b",
+    "Signal Abnormality": r"\bsignal abnormalit",
+    "Midline Shift": r"\bmidline shift\b",
+    "Mass Effect": r"\bmass effect\b",
+    "Cystic Lesion": r"\bcyst(?:ic)? lesion\b|\bcyst\b",
+    "Encephalomalacia": r"\bencephalomalacia\b",
+    "Demyelinating Disease": r"\bdemyelinating\b",
+    "Calcification": r"\bcalcification\b",
+    "Skull Fracture": r"\bskull fracture\b"
+}
+ 
+ 
+NEGATION_PATTERNS = [
+    r"\bno\b",
+    r"\bno evidence of\b",
+    r"\bwithout\b",
+    r"\babsence of\b",
+    r"\bnegative for\b",
+    r"\bnot seen\b",
+    r"\bfree of\b"
+]
+ 
+ 
+def is_negated(sentence):
+    sentence = sentence.lower()
+ 
+    for pattern in NEGATION_PATTERNS:
+        if re.search(pattern, sentence):
+            return True
+ 
+    return False
+ 
+ 
+def detect_body_part(text):
+ 
+    text = text.lower()
+ 
+    brain_patterns = [
+        r"\bbrain\b",
+        r"\bpons\b",
+        r"\bcerebral\b",
+        r"\bcerebell",
+        r"\bventricles\b",
+        r"\bintracranial\b"
+    ]
+ 
+    chest_patterns = [
+        r"\blung",
+        r"\bpleural",
+        r"\bpneumothorax",
+        r"\bmediast",
+        r"\bcardiomediast"
+    ]
+ 
+    if any(re.search(p, text) for p in brain_patterns):
+        return "brain"
+ 
+    if any(re.search(p, text) for p in chest_patterns):
+        return "chest"
+ 
+    return "unknown"
+ 
+ 
+def extract_findings(report):
+ 
+    findings_match = re.search(
+        r"FINDINGS:\s*(.*?)(?=\s*IMPRESSION:|$)",
+        report,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+ 
+    if findings_match:
+        return findings_match.group(1).strip()
+ 
+    return report.strip()
+ 
+ 
+def extract_abnormalities(text, abnormalities_map):
+ 
+    abnormalities = []
+ 
+    sentences = re.split(r"[.;\n]+", text)
+ 
+    for sentence in sentences:
+ 
+        sentence = sentence.strip()
+ 
+        if not sentence:
+            continue
+ 
+        negated = is_negated(sentence)
+ 
+        for label, pattern in abnormalities_map.items():
+ 
+            if re.search(pattern, sentence, re.IGNORECASE):
+ 
+                if not negated:
+                    abnormalities.append(label)
+ 
+    return sorted(list(set(abnormalities)))
+ 
+ 
+def report_to_json(report, modality):
+ 
+    findings = extract_findings(report)
+    print("json findings:", findings)
+
+    if(modality == 'MR'):
+         selected_abnormality_map = ABNORMALITY_MAP_MR
+    elif(modality == 'CT'):
+         selected_abnormality_map = ABNORMALITY_MAP_CT
+        
+   
+    abnormalities = extract_abnormalities(findings, selected_abnormality_map)
+    print("json abnormalities:", abnormalities)
+    result = {
+        "Normal": len(abnormalities) == 0,
+        "abnormality": abnormalities,
+        "body_part": detect_body_part(report),
+        "finding": findings
+    }
+ 
+    return result
+
 
 # CT functions
 
@@ -222,25 +383,6 @@ def run_medgemma_ct(message):
     response = output[0]["generated_text"][-1]["content"]
     print("model ka output is :-", response)
     return response
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

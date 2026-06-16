@@ -8,11 +8,11 @@ from zipfile import ZipFile
 from fastapi.responses import JSONResponse
 
 from utils.prompt import x_ray_prompt, mri_prompt, ct_prompt
-from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct
+from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct, report_to_json
 
 router = APIRouter()
 
-DICOM_TEMP_PATH= '/home/nafisha/medGemma_service/tmp/dicom_uploads'
+DICOM_TEMP_PATH= '/home/pragya/medGemma_service/tmp/dicom_uploads'
 os.makedirs(DICOM_TEMP_PATH, exist_ok=True)
 
 @router.post("/predict")
@@ -49,7 +49,7 @@ async def predict(
         modality = check_modality(file_paths[0])
         print("Modality is :- ", modality)
 
-        if (modality =='CR'):
+        if (modality =='CR' or modality == 'XA'):
             dicom_path  = file_paths[0]
             output_path = os.path.splitext(dicom_path)[0] + ".png"
     
@@ -68,8 +68,9 @@ async def predict(
             # print(message)
             print("in main and msg is prepared")
             model_response = run_medgemma_mr(message)
-            # print(model_response)
-            response = {'finding': model_response}
+            print("MR response",model_response)
+            response = report_to_json(model_response, modality)
+            # print("final response of MR", response)
             
         elif (modality =='CT'):
             message = prepare_message_ct(file_paths, ct_prompt)
@@ -78,7 +79,8 @@ async def predict(
             print("in main and msg is prepared")
             model_response = run_medgemma_ct(message)
             # print(model_response)
-            response = {'finding': model_response}
+            response = report_to_json(model_response, modality)
+            # print("final response of CT", response)
             
         else:
             response = {'finding':'Modality not supported'}
