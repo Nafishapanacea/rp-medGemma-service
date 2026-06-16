@@ -9,10 +9,10 @@ from fastapi.responses import JSONResponse
 
 from utils.prompt import x_ray_prompt, mri_prompt, ct_prompt
 from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct, report_to_json
+from src.configuration.config import DICOM_TEMP_PATH
 
 router = APIRouter()
 
-DICOM_TEMP_PATH= '/home/pragya/medGemma_service/tmp/dicom_uploads'
 os.makedirs(DICOM_TEMP_PATH, exist_ok=True)
 
 @router.post("/predict")

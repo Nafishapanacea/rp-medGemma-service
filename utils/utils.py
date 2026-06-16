@@ -7,8 +7,8 @@ import numpy as np
 import re
 import io
 import json
+from src.configuration.config import json_regex, ABNORMALITY_MAP_MR, ABNORMALITY_MAP_CT, NEGATION_PATTERNS, brain_patterns, chest_patterns
 
-json_regex = r"```json\s*(\{.*?\})\s*```"
 
 def check_modality(dicom_path):
     ds = pydicom.dcmread(dicom_path)
@@ -150,168 +150,7 @@ def run_medgemma_mr(message):
     print("model ka output is :-", response)
     return response
 
-
  
-ABNORMALITY_MAP_MR = {
-    "Lesion": r"\blesion\b",
-    "Mass": r"\bmass\b",
-    "Tumor": r"\btumou?r\b",
-    "Metastasis": r"\bmetastasis\b",
-    "Hemorrhage": r"\bhemorrhage\b",
-    "Infarct": r"\binfarct(?:ion)?\b",
-    "Edema": r"\bedema\b",
-    "Hydrocephalus": r"\bhydrocephalus\b",
-    "White Matter Abnormality": r"\bwhite matter abnormalit",
-    "Extra-axial Lesion": r"\bextra[- ]axial\b",
-    "Vascular Abnormality": r"\bvascular abnormalit",
-    "Postoperative Change": r"\bpostoperative change",
-    "Atrophy": r"\batrophy\b",
-    "Signal Abnormality": r"\bsignal abnormalit",
-    "Midline Shift": r"\bmidline shift\b",
-    "Mass Effect": r"\bmass effect\b",
-    "Cystic Lesion": r"\bcyst(?:ic)? lesion\b|\bcyst\b",
-    "Encephalomalacia": r"\bencephalomalacia\b",
-    "Demyelinating Disease": r"\bdemyelinating\b",
-    "Calcification": r"\bcalcification\b",
-    "Skull Fracture": r"\bskull fracture\b"
-}
-
-ABNORMALITY_MAP_CT = {
-    "Lesion": r"\blesion\b",
-    "Mass": r"\bmass\b",
-    "Tumor": r"\btumou?r\b",
-    "Hemorrhage": r"\bhemorrhage\b",
-    "Infarct": r"\binfarct(?:ion)?\b",
-    "Edema": r"\bedema\b",
-    "Hydrocephalus": r"\bhydrocephalus\b",
-    "White Matter Abnormality": r"\bwhite matter abnormalit",
-    "Extra-axial Lesion": r"\bextra[- ]axial\b",
-    "Vascular Abnormality": r"\bvascular abnormalit",
-    "Postoperative Change": r"\bpostoperative change",
-    "Atrophy": r"\batrophy\b",
-    "Signal Abnormality": r"\bsignal abnormalit",
-    "Midline Shift": r"\bmidline shift\b",
-    "Mass Effect": r"\bmass effect\b",
-    "Cystic Lesion": r"\bcyst(?:ic)? lesion\b|\bcyst\b",
-    "Encephalomalacia": r"\bencephalomalacia\b",
-    "Demyelinating Disease": r"\bdemyelinating\b",
-    "Calcification": r"\bcalcification\b",
-    "Skull Fracture": r"\bskull fracture\b"
-}
- 
- 
-NEGATION_PATTERNS = [
-    r"\bno\b",
-    r"\bno evidence of\b",
-    r"\bwithout\b",
-    r"\babsence of\b",
-    r"\bnegative for\b",
-    r"\bnot seen\b",
-    r"\bfree of\b"
-]
- 
- 
-def is_negated(sentence):
-    sentence = sentence.lower()
- 
-    for pattern in NEGATION_PATTERNS:
-        if re.search(pattern, sentence):
-            return True
- 
-    return False
- 
- 
-def detect_body_part(text):
- 
-    text = text.lower()
- 
-    brain_patterns = [
-        r"\bbrain\b",
-        r"\bpons\b",
-        r"\bcerebral\b",
-        r"\bcerebell",
-        r"\bventricles\b",
-        r"\bintracranial\b"
-    ]
- 
-    chest_patterns = [
-        r"\blung",
-        r"\bpleural",
-        r"\bpneumothorax",
-        r"\bmediast",
-        r"\bcardiomediast"
-    ]
- 
-    if any(re.search(p, text) for p in brain_patterns):
-        return "brain"
- 
-    if any(re.search(p, text) for p in chest_patterns):
-        return "chest"
- 
-    return "unknown"
- 
- 
-def extract_findings(report):
- 
-    findings_match = re.search(
-        r"FINDINGS:\s*(.*?)(?=\s*IMPRESSION:|$)",
-        report,
-        flags=re.IGNORECASE | re.DOTALL
-    )
- 
-    if findings_match:
-        return findings_match.group(1).strip()
- 
-    return report.strip()
- 
- 
-def extract_abnormalities(text, abnormalities_map):
- 
-    abnormalities = []
- 
-    sentences = re.split(r"[.;\n]+", text)
- 
-    for sentence in sentences:
- 
-        sentence = sentence.strip()
- 
-        if not sentence:
-            continue
- 
-        negated = is_negated(sentence)
- 
-        for label, pattern in abnormalities_map.items():
- 
-            if re.search(pattern, sentence, re.IGNORECASE):
- 
-                if not negated:
-                    abnormalities.append(label)
- 
-    return sorted(list(set(abnormalities)))
- 
- 
-def report_to_json(report, modality):
- 
-    findings = extract_findings(report)
-    print("json findings:", findings)
-
-    if(modality == 'MR'):
-         selected_abnormality_map = ABNORMALITY_MAP_MR
-    elif(modality == 'CT'):
-         selected_abnormality_map = ABNORMALITY_MAP_CT
-        
-   
-    abnormalities = extract_abnormalities(findings, selected_abnormality_map)
-    print("json abnormalities:", abnormalities)
-    result = {
-        "Normal": len(abnormalities) == 0,
-        "abnormality": abnormalities,
-        "body_part": detect_body_part(report),
-        "finding": findings
-    }
- 
-    return result
-
 
 # CT functions
 
@@ -385,40 +224,95 @@ def run_medgemma_ct(message):
     return response
 
 
+# convert to json
 
-import matplotlib.pyplot as plt
-import math
-import os
+ 
+def is_negated(sentence):
+    sentence = sentence.lower()
+ 
+    for pattern in NEGATION_PATTERNS:
+        if re.search(pattern, sentence):
+            return True
+ 
+    return False
+ 
+ 
+def detect_body_part(text):
+ 
+    text = text.lower()
 
-
-def save_debug_mri_slices(slices,
-                          save_path="/home/nafisha/medGemma_service/debug_mri_slices.png"):
-    print("in plotting function")
-    n = len(slices)
-
-    cols = 5
-    rows = math.ceil(n / cols)
-
-    fig, axes = plt.subplots(
-        rows,
-        cols,
-        figsize=(15, rows * 3)
+    if any(re.search(p, text) for p in brain_patterns):
+        return "brain"
+ 
+    if any(re.search(p, text) for p in chest_patterns):
+        return "chest"
+ 
+    return "unknown"
+ 
+ 
+def extract_findings(report):
+ 
+    findings_match = re.search(
+        r"FINDINGS:\s*(.*?)(?=\s*IMPRESSION:|$)",
+        report,
+        flags=re.IGNORECASE | re.DOTALL
     )
+ 
+    if findings_match:
+        return findings_match.group(1).strip()
+ 
+    return report.strip()
+ 
+ 
+def extract_abnormalities(text, abnormalities_map):
+ 
+    abnormalities = []
+ 
+    sentences = re.split(r"[.;\n]+", text)
+ 
+    for sentence in sentences:
+ 
+        sentence = sentence.strip()
+ 
+        if not sentence:
+            continue
+ 
+        negated = is_negated(sentence)
+ 
+        for label, pattern in abnormalities_map.items():
+ 
+            if re.search(pattern, sentence, re.IGNORECASE):
+ 
+                if not negated:
+                    abnormalities.append(label)
+ 
+    return sorted(list(set(abnormalities)))
+ 
+ 
+def report_to_json(report, modality):
+ 
+    findings = extract_findings(report)
+    print("json findings:", findings)
 
-    axes = np.array(axes).reshape(-1)
+    if(modality == 'MR'):
+         selected_abnormality_map = ABNORMALITY_MAP_MR
+    elif(modality == 'CT'):
+         selected_abnormality_map = ABNORMALITY_MAP_CT
+        
+   
+    abnormalities = extract_abnormalities(findings, selected_abnormality_map)
+    print("json abnormalities:", abnormalities)
+    result = {
+        "Normal": len(abnormalities) == 0,
+        "abnormality": abnormalities,
+        "body_part": detect_body_part(report),
+        "finding": findings
+    }
+ 
+    return result
 
-    for i, ax in enumerate(axes):
 
-        if i < n:
-            ax.imshow(slices[i], cmap="gray")
-            ax.set_title(f"Slice {i}")
-            ax.axis("off")
-        else:
-            ax.axis("off")
 
-    plt.tight_layout()
 
-    plt.savefig(save_path, bbox_inches="tight")
-    plt.close()
 
-    print(f"Debug MRI saved to: {save_path}")
+
