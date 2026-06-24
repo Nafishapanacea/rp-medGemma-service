@@ -1,4 +1,4 @@
-DICOM_TEMP_PATH= '/home/pragya/medGemma_service/tmp/dicom_uploads'
+DICOM_TEMP_PATH= '/home/omen/Documents/rp-medGemma-service/tmp/dicom_uploads'
 
 json_regex = r"```json\s*(\{.*?\})\s*```"
 

@@ -7,7 +7,70 @@ import numpy as np
 import re
 import io
 import json
+import os
+import glob
+import requests
+from collections import defaultdict
 from src.configuration.config import json_regex, ABNORMALITY_MAP_MR, ABNORMALITY_MAP_CT, NEGATION_PATTERNS, brain_patterns, chest_patterns
+
+
+
+def download_study_zip(pacs_url: str, study_id: str, auth_cred: str, output_zip_path: str):
+    """Downloads the study ZIP from Orthanc to the specified local path."""
+    download_url = f"{pacs_url}/studies/{study_id}/archive"
+    headers = {"Accept": "application/zip"}
+    
+    if auth_cred:
+        headers["Authorization"] = auth_cred
+
+    with requests.get(download_url, headers=headers, stream=True) as r:
+        r.raise_for_status()  # Raise error if Orthanc returns 404/401
+        with open(output_zip_path, 'wb') as out_file:
+            for chunk in r.iter_content(chunk_size=8192):
+                out_file.write(chunk)
+                
+    return output_zip_path
+
+
+def get_best_image_series(temp_dir: str):
+    """Scans a directory for DICOMs, ignores SEG/SR/etc., and returns paths for the largest series."""
+    raw_file_paths  = glob.glob(os.path.join(temp_dir, "**", "*.dcm"), recursive=True)
+    raw_file_paths += glob.glob(os.path.join(temp_dir, "**", "*.dicom"), recursive=True)
+
+    # Fallback if files don't have extensions
+    if not raw_file_paths:
+        for root, dirs, files in os.walk(temp_dir):
+            for f in files:
+                if not f.endswith(".zip") and not f.endswith(".json"):
+                    raw_file_paths.append(os.path.join(root, f))
+
+    if not raw_file_paths:
+        return None, "No DICOM files found inside the ZIP."
+
+    series_dict = defaultdict(list)
+    # Ignore non-image modalities
+    ignored_modalities = ['SEG', 'SR', 'PR', 'KO', 'RTSTRUCT']
+
+    for f in raw_file_paths:
+        try:
+            # stop_before_pixels=True reads only headers, keeping this loop extremely fast
+            ds = pydicom.dcmread(f, stop_before_pixels=True)
+            mod = getattr(ds, 'Modality', 'UNKNOWN')
+            
+            if mod not in ignored_modalities:
+                series_uid = getattr(ds, 'SeriesInstanceUID', 'UNKNOWN_SERIES')
+                series_dict[series_uid].append(f)
+        except Exception:
+            continue # Skip files that aren't valid DICOMs
+
+    if not series_dict:
+        return None, "No valid image series found (only found SEG/SR)."
+
+    # Select the series with the most slices (isolates the main 3D volume)
+    best_series_uid = max(series_dict, key=lambda uid: len(series_dict[uid]))
+    best_file_paths = series_dict[best_series_uid]
+    
+    return best_file_paths, None
 
 
 def check_modality(dicom_path):
@@ -303,7 +366,7 @@ def report_to_json(report, modality):
     abnormalities = extract_abnormalities(findings, selected_abnormality_map)
     print("json abnormalities:", abnormalities)
     result = {
-        "Normal": len(abnormalities) == 0,
+        "normal": len(abnormalities) == 0,
         "abnormality": abnormalities,
         "body_part": detect_body_part(report),
         "finding": findings
