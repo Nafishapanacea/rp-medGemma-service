@@ -7,8 +7,6 @@ import numpy as np
 import re
 import io
 import json
-import io
-import json
 import os
 import glob
 import requests
@@ -51,7 +49,7 @@ def get_best_image_series(temp_dir: str):
 
     series_dict = defaultdict(list)
     # Ignore non-image modalities
-    ignored_modalities = ['SEG', 'SR', 'PR', 'KO', 'RTSTRUCT', 'OT']
+    ignored_modalities = ['SEG', 'SR', 'PR', 'KO', 'RTSTRUCT']
 
     for f in raw_file_paths:
         try:
@@ -368,7 +366,7 @@ def report_to_json(report, modality):
     abnormalities = extract_abnormalities(findings, selected_abnormality_map)
     print("json abnormalities:", abnormalities)
     result = {
-        "Normal": len(abnormalities) == 0,
+        "normal": len(abnormalities) == 0,
         "abnormality": abnormalities,
         "body_part": detect_body_part(report),
         "finding": findings

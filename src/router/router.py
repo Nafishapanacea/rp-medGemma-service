@@ -68,16 +68,19 @@ def predict(
                 output_path = os.path.splitext(dicom_path)[0] + ".png"
                 dicom_to_image(dicom_path, output_path, format="png")
                 response = run_medgemma_xray(output_path, x_ray_prompt)
+                print("CR response-->",response)
                 
             elif (modality =='MR'):
                 message = prepare_message_mr(file_paths, mri_prompt)
                 model_response = run_medgemma_mr(message)
                 response = report_to_json(model_response, modality)
+                print("MR response-->",response)
                 
             elif (modality =='CT'):
                 message = prepare_message_ct(file_paths, ct_prompt)
                 model_response = run_medgemma_ct(message)
                 response = report_to_json(model_response, modality)
+                print("CT response-->",response)
                 
             else:
                 response = {'finding':'Modality not supported'}
