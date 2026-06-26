@@ -10,8 +10,8 @@ import requests
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
-from utils.prompt import x_ray_prompt, mri_prompt, ct_prompt
-from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct, report_to_json,download_study_zip, get_best_image_series
+from utils.prompt import x_ray_prompt, mri_prompt, ct_prompt, get_production_super_prompt_auto
+from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct, report_to_json,download_study_zip, get_best_image_series, extract_body_part_from_dicom
 from src.configuration.config import DICOM_TEMP_PATH
 
 router = APIRouter()
@@ -31,7 +31,7 @@ def predict(
     temp_dir = tempfile.mkdtemp(dir=DICOM_TEMP_PATH)
 
     try:
-        pacs_url = payload.pacsUrl or os.getenv("PACS_URL", "https://dev.radpretation.ai/pacs")
+        pacs_url = payload.pacsUrl or os.getenv("PACS_URL", "https://rad-pacs.radpretation.ai/orthanc")
         auth_cred = payload.authCred or os.getenv("AUTH_CRED")
 
         if not pacs_url:
@@ -63,30 +63,69 @@ def predict(
         with gpu_lock:
             print(f"Acquired GPU lock. Running AI for {payload.studyId}...")
             
-            if (modality =='CR' or modality == 'XA'):
+            # --- METADATA EVALUATION LAYER ---
+            # Used ONLY for internal pipeline routing, never passed to the fallback prompt strings
+            meta_body_part = extract_body_part_from_dicom(file_paths[0])
+            print(f"Metadata extracted body part for routing check: {meta_body_part}")
+            
+            # Load the unified standalone super prompt as our universal fallback layout
+            fallback_prompt = get_production_super_prompt_auto(modality)
+            
+            # ── 1. RADIOGRAPH HANDLING (CR/XA/DX) ────────────────────────
+            if (modality in ['CR', 'XA', 'DX']):
                 dicom_path  = file_paths[0]
                 output_path = os.path.splitext(dicom_path)[0] + ".png"
                 dicom_to_image(dicom_path, output_path, format="png")
-                response = run_medgemma_xray(output_path, x_ray_prompt)
-                print("CR response-->",response)
                 
-            elif (modality =='MR'):
-                message = prepare_message_mr(file_paths, mri_prompt)
+                if meta_body_part == "chest":
+                    response = run_medgemma_xray(output_path, x_ray_prompt)
+                else:
+                    model_response = run_medgemma_xray(output_path, fallback_prompt)
+                    
+                    # If parse_output successfully extracted the JSON into a dict, use it!
+                    if isinstance(model_response, dict):
+                        response = {
+                            "normal": model_response.get("Normal") if "Normal" in model_response else model_response.get("normal", True),
+                            "abnormality": model_response.get("abnormality", []),
+                            "body_part": meta_body_part or model_response.get("body_part", "unknown"),
+                            "finding": model_response.get("finding", "")
+                        }
+                    else:
+                        # Only fall back to regex mapping if it returned raw prose text
+                        response = report_to_json(model_response, modality, meta_body_part)
+                        
+                print("CR/XA/DX response-->", response)
+                
+            # ── 2. MRI HANDLING (MR) ─────────────────────────────────────
+            elif (modality == 'MR'):
+                if meta_body_part in ["head", "brain"]:
+                    # Matches our explicit profile
+                    message = prepare_message_mr(file_paths, mri_prompt)
+                else:
+                    # Fallback to the auto-detect super prompt
+                    message = prepare_message_mr(file_paths, fallback_prompt)
+                    
                 model_response = run_medgemma_mr(message)
-                response = report_to_json(model_response, modality)
-                print("MR response-->",response)
+                response = report_to_json(model_response, modality, meta_body_part)
+                print("MR response-->", response)
                 
-            elif (modality =='CT'):
-                message = prepare_message_ct(file_paths, ct_prompt)
+            # ── 3. COMPUTED TOMOGRAPHY HANDLING (CT) ─────────────────────
+            elif (modality == 'CT'):
+                if meta_body_part in ["head", "brain"]:
+                    # Matches our explicit profile
+                    message = prepare_message_ct(file_paths, ct_prompt)
+                else:
+                    # Fallback to the auto-detect super prompt
+                    message = prepare_message_ct(file_paths, fallback_prompt)
+                    
                 model_response = run_medgemma_ct(message)
-                response = report_to_json(model_response, modality)
-                print("CT response-->",response)
+                response = report_to_json(model_response, modality, meta_body_part)
+                print("CT response-->", response)
                 
             else:
-                response = {'finding':'Modality not supported'}
+                response = {'finding': 'Modality not supported'}
             
             print(f"AI finished. Releasing GPU lock for {payload.studyId}.")
-
         # ── Save and Return ───────────────────────────────────────────────
         temp_dir_return = tempfile.mkdtemp(dir=DICOM_TEMP_PATH)
         json_filepath = os.path.join(temp_dir_return, "predictions.json")
