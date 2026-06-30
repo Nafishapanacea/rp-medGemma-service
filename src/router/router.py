@@ -78,7 +78,7 @@ def predict(
                 dicom_to_image(dicom_path, output_path, format="png")
                 
                 if meta_body_part == "chest":
-                    response = run_medgemma_xray(output_path, x_ray_prompt)
+                    model_response = run_medgemma_xray(output_path, x_ray_prompt)
                 else:
                     model_response = run_medgemma_xray(output_path, fallback_prompt)
                     

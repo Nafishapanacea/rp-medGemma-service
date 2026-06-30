@@ -316,7 +316,7 @@ def detect_body_part(text):
 def extract_findings(report):
  
     findings_match = re.search(
-        r"FINDINGS:\s*(.*?)(?=\s*IMPRESSION:|$)",
+        r"FINDINGS?:\s*(.*?)(?=\s*IMPRESSIONS?:|$)",
         report,
         flags=re.IGNORECASE | re.DOTALL
     )
