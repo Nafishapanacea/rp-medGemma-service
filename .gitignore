@@ -1,5 +1,7 @@
 /Data
 /tmp
+.env
 
 .ipynb_checkpoints/
+.*pyc
 

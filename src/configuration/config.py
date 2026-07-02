@@ -79,3 +79,44 @@ chest_patterns = [
         r"\bmediast",
         r"\bcardiomediast"
     ]
+
+
+
+# Expanded Anatomy Patterns (Head to Toe Coverage)
+abdomen_patterns = [r"\babdomen\b", r"\bkub\b", r"\bliver\b", r"\bspleen\b", r"\bkidneys?\b", r"\brenal\b", r"\bpancreas\b", r"\bperitoneum\b"]
+pelvis_patterns = [r"\bpelvis\b", r"\bhip\b", r"\bbladder\b", r"\bprostate\b", r"\buterus\b", r"\bsacrum\b", r"\biliac\b"]
+spine_patterns = [r"\bspine\b", r"\bcervical\b", r"\bthoracic\b", r"\blumbar\b", r"\bvertebra\b", r"\bsacral\b", r"\bcoccyx\b"]
+extremity_patterns = [r"\barm\b", r"\bleg\b", r"\bhand\b", r"\bfoot\b", r"\bfinger\b", r"\btoe\b", r"\bfemur\b", r"\btibia\b", r"\bfibula\b", r"\bhumerus\b", r"\bradius\b", r"\bulna\b", r"\bpatella\b", r"\bknee\b", r"\bankle\b", r"\bshoulder\b", r"\belbow\b", r"\bwrist\b", r"\bclavicle\b", r"\bscapula\b"]
+
+# Mapping dictionaries for regex validation loops
+BODY_PART_RE_MAP = {
+    "head": brain_patterns, # matches your existing variable name
+    "chest": chest_patterns,
+    "abdomen": abdomen_patterns,
+    "pelvis": pelvis_patterns,
+    "spine": spine_patterns,
+    "extremity": extremity_patterns
+}
+
+# Standardized Allowed Vocabulary Mapping for Radiographs (CR/XA/DX)
+ABNORMALITY_MAP_CR = {
+    "Atelectasis": r"\batelectasis\b",
+    "Consolidation": r"\bconsolidation\b",
+    "Infiltration": r"\binfiltration\b",
+    "Pneumothorax": r"\bpneumothorax\b",
+    "Edema": r"\bedema\b",
+    "Emphysema": r"\bemphysema\b",
+    "Fibrosis": r"\bfibrosis\b",
+    "Effusion": r"\beffusion\b|\bpleural effusion\b",
+    "Pneumonia": r"\bpneumonia\b",
+    "Pleural_Thickening": r"\bpleural thickening\b",
+    "Cardiomegaly": r"\bcardiomegaly\b",
+    "Nodule": r"\bnodule\b",
+    "Mass": r"\bmass\b",
+    "Hernia": r"\bhernia\b",
+    "Lung Lesion": r"\blung lesion\b",
+    "Fracture": r"\bfracture\b",
+    "Lung Opacity": r"\blung opacity\b|\bopacity\b",
+    "Enlarged Cardiomediastinum": r"\benlarged cardiomediastinum\b",
+    "Tuberculosis": r"\btuberculosis\b"
+}

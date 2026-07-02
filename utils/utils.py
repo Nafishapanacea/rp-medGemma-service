@@ -11,7 +11,7 @@ import os
 import glob
 import requests
 from collections import defaultdict
-from src.configuration.config import json_regex, ABNORMALITY_MAP_MR, ABNORMALITY_MAP_CT, NEGATION_PATTERNS, brain_patterns, chest_patterns
+from src.configuration.config import json_regex, ABNORMALITY_MAP_MR, ABNORMALITY_MAP_CT, NEGATION_PATTERNS, brain_patterns, chest_patterns,BODY_PART_RE_MAP, ABNORMALITY_MAP_CR
 
 
 
@@ -316,7 +316,7 @@ def detect_body_part(text):
 def extract_findings(report):
  
     findings_match = re.search(
-        r"FINDINGS:\s*(.*?)(?=\s*IMPRESSION:|$)",
+        r"FINDINGS?:\s*(.*?)(?=\s*IMPRESSIONS?:|$)",
         report,
         flags=re.IGNORECASE | re.DOTALL
     )
@@ -352,30 +352,75 @@ def extract_abnormalities(text, abnormalities_map):
     return sorted(list(set(abnormalities)))
  
  
-def report_to_json(report, modality):
- 
+# Extend your existing report_to_json function to dynamically handle CR/XA/DX and fallbacks
+def report_to_json(report, modality, known_body_part=None):
     findings = extract_findings(report)
     print("json findings:", findings)
 
-    if(modality == 'MR'):
-         selected_abnormality_map = ABNORMALITY_MAP_MR
-    elif(modality == 'CT'):
-         selected_abnormality_map = ABNORMALITY_MAP_CT
+    # Route maps safely
+    if modality == 'MR':
+        selected_abnormality_map = ABNORMALITY_MAP_MR
+    elif modality == 'CT':
+        selected_abnormality_map = ABNORMALITY_MAP_CT
+    elif modality in ['CR', 'XA', 'DX']:
+        selected_abnormality_map = ABNORMALITY_MAP_CR
+    else:
+        selected_abnormality_map = {}
         
-   
     abnormalities = extract_abnormalities(findings, selected_abnormality_map)
     print("json abnormalities:", abnormalities)
+    
+    # Resolve the body part token matching cascade
+    resolved_body_part = known_body_part or detect_body_part(report)
+    if resolved_body_part == "unknown":
+        resolved_body_part = extract_body_part_from_text_fallback(report)
+
     result = {
         "normal": len(abnormalities) == 0,
         "abnormality": abnormalities,
-        "body_part": detect_body_part(report),
+        "body_part": resolved_body_part,
         "finding": findings
     }
- 
     return result
 
 
 
+def extract_body_part_from_dicom(first_file_path):
+    """
+    Attempts to read metadata tags (0018,0015), (0008,0104), and (0008,1030).
+    Runs the values through a regex matching layout to return a matched label.
+    """
+    try:
+        ds = pydicom.dcmread(first_file_path, stop_before_pixels=True)
+        
+        # Pull text components from fallback attributes safely
+        candidates = [
+            str(getattr(ds, 'BodyPartExamined', '')),
+            str(ds.get((0x0008, 0x0104), {}).get('value', '')), # Code Meaning
+            str(getattr(ds, 'StudyDescription', ''))
+        ]
+        
+        combined_text = " ".join(candidates).lower()
+        if not combined_text.strip():
+            return None
+            
+        # Match using the full anatomical coverage array map
+        for label, patterns in BODY_PART_RE_MAP.items():
+            for pattern in patterns:
+                if re.search(pattern, combined_text):
+                    return label
+    except Exception:
+        pass
+    return None
 
+
+def extract_body_part_from_text_fallback(report_text):
+    """Fallback parser to uncover the targeted anatomy from raw prose text."""
+    text_lower = report_text.lower()
+    for label, patterns in BODY_PART_RE_MAP.items():
+        for pattern in patterns:
+            if re.search(pattern, text_lower):
+                return label
+    return "unknown"
 
 
