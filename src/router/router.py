@@ -23,6 +23,7 @@ class InferencePayload(BaseModel):
     studyId: str
     pacsUrl: Optional[str] = None
     authCred: Optional[str] = None
+    callbackUrl: Optional[str] = None
 
 @router.post("/predict")
 def predict(
@@ -126,6 +127,49 @@ def predict(
                 response = {'finding': 'Modality not supported'}
             
             print(f"AI finished. Releasing GPU lock for {payload.studyId}.")
+
+        # ── Webhook Delivery (Push Result) ───────────────────────────────
+        if payload.callbackUrl:
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": os.getenv("MEDGEMMA_WEBHOOK_API_KEY", "medgemma_webhook_secret_2026")
+            }
+            callback_payload = {
+                "studyId": payload.studyId,
+                "result": response
+            }
+            
+            import time
+            max_retries = 3
+            backoff_delay = 1.0
+            delivered = False
+            
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"Delivering webhook to {payload.callbackUrl} (Attempt {attempt}/{max_retries})...")
+                    attempt_headers = headers.copy()
+                    if attempt > 1:
+                        attempt_headers["x-retry"] = "true"
+                        attempt_headers["x-retry-count"] = str(attempt - 1)
+                        
+                    res = requests.post(payload.callbackUrl, json=callback_payload, headers=attempt_headers, timeout=10)
+                    if res.status_code == 200:
+                        print(f"Webhook delivered successfully to {payload.callbackUrl} on attempt {attempt}")
+                        delivered = True
+                        break
+                    else:
+                        print(f"Webhook delivery failed with status {res.status_code}: {res.text}")
+                except Exception as e:
+                    print(f"Webhook delivery exception on attempt {attempt}: {str(e)}")
+                
+                if attempt < max_retries:
+                    sleep_time = backoff_delay * (2 ** (attempt - 1))
+                    print(f"Waiting {sleep_time}s before retrying...")
+                    time.sleep(sleep_time)
+            
+            if not delivered:
+                print(f"Error: Webhook delivery failed after {max_retries} attempts.")
+
         # ── Save and Return ───────────────────────────────────────────────
         temp_dir_return = tempfile.mkdtemp(dir=DICOM_TEMP_PATH)
         json_filepath = os.path.join(temp_dir_return, "predictions.json")
