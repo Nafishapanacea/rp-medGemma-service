@@ -7,3 +7,4 @@ torch==2.11.0
 uvicorn==0.49.0
 git+https://github.com/huggingface/transformers.git
 python-multipart==0.0.9
+pika==1.3.2
