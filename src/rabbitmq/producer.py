@@ -3,7 +3,7 @@ import json
 import os
 from src.rabbitmq.connection import get_connection_and_channel
 
-EXCHANGE_NAME = "study.exchange"
+EXCHANGE_NAME = "study.aiexchangeresponse"
 EXCHANGE_TYPE = "direct"
 ROUTING_KEY = "study.result"
 

@@ -7,7 +7,7 @@ from src.rabbitmq.producer import publish_result
 from src.router.router import predict, InferencePayload
 from src.configuration.config import DICOM_TEMP_PATH
 
-EXCHANGE_NAME = "study.exchange"
+EXCHANGE_NAME = "study.aiexchange"
 EXCHANGE_TYPE = "direct"
 ROUTING_KEY = "study.new"
 QUEUE_NAME = "medgemma.study.queue"
