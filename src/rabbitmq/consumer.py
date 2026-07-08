@@ -12,12 +12,42 @@ EXCHANGE_TYPE = "direct"
 ROUTING_KEY = "study.new"
 QUEUE_NAME = "medgemma.study.queue"
 
+def republish_and_ack(ch, method, body, reason: str) -> None:
+    """
+    Republishes the identical message back to the same exchange and routing key,
+    then ACKs the current message. This moves the item to the back of the queue
+    so other tasks can be processed.
+    """
+    try:
+        print(f"[RabbitMQ Consumer] Re-queueing message to the back of the queue. Reason: {reason}")
+        
+        # Publish the same message to the same exchange and routing key
+        ch.basic_publish(
+            exchange=method.exchange,
+            routing_key=method.routing_key,
+            body=body,
+            properties=pika.BasicProperties(
+                delivery_mode=2,  # keep the message durable
+                content_type="application/json"
+            )
+        )
+        
+        # ACK the current message to remove it from the head of the queue
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        print(f"[RabbitMQ Consumer] Re-queueing complete. Current message ACKed.")
+    except Exception as e:
+        print(f"[RabbitMQ Consumer] Failed to republish message: {str(e)}. Falling back to standard basic_nack.")
+        try:
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+        except Exception as nack_err:
+            print(f"[RabbitMQ Consumer] Critical: failed to perform fallback nack: {nack_err}")
+
 def process_message(ch, method, properties, body):
     try:
         payload = json.loads(body.decode("utf-8"))
         study_id = payload.get("studyId")
         if not study_id:
-            print("[RabbitMQ Consumer] Received invalid message payload: missing 'studyId'. Acking to discard.")
+            print("[RabbitMQ Consumer] Received invalid message payload: missing 'studyId'. Discarding (ACK).")
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 
@@ -58,21 +88,22 @@ def process_message(ch, method, properties, body):
             except Exception as cleanup_err:
                 print(f"[RabbitMQ Consumer] Temp prediction folder cleanup error: {cleanup_err}")
 
-            # Publish the parsed predictions to RabbitMQ using the new producer
+            # Publish the parsed predictions to RabbitMQ
             publish_result(study_id, predictions)
 
+            # Successfully processed, ACK the current message
             ch.basic_ack(delivery_tag=method.delivery_tag)
             print(f"[RabbitMQ Consumer] Successfully processed and published results for studyId: '{study_id}'")
         else:
-            print(f"[RabbitMQ Consumer] Inference failed with status {response.status_code}: {response.body.decode('utf-8')}. Requeuing message...")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-            time.sleep(2)
+            # Prediction failed (e.g., HTTP 503 Study not found or PACS unauthorized)
+            error_msg = response.body.decode('utf-8')
+            reason = f"Non-200 response status: {response.status_code} ({error_msg})"
+            republish_and_ack(ch, method, body, reason)
 
     except Exception as e:
-        print(f"[RabbitMQ Consumer] Error during message processing: {str(e)}")
-        # Negative acknowledge the message and requeue it so it can be retried
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-        time.sleep(2)
+        # Unexpected exceptions during message processing (e.g. JSON parsing error, file errors)
+        reason = f"Unexpected processing error: {str(e)}"
+        republish_and_ack(ch, method, body, reason)
 
 def start_consumer():
     print(f"[RabbitMQ Consumer] Starting main consumer loop...")
