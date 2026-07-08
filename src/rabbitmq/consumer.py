@@ -3,9 +3,10 @@ import json
 import os
 import time
 from src.rabbitmq.connection import get_connection_and_channel, close_connection
+from src.rabbitmq.producer import publish_result
 from src.router.router import predict, InferencePayload
+from src.configuration.config import DICOM_TEMP_PATH
 
-BACKEND_CALLBACK_URL = os.getenv("BACKEND_CALLBACK_URL", "http://192.168.1.103:8000/api/pub/medgemma-callback")
 EXCHANGE_NAME = "study.exchange"
 EXCHANGE_TYPE = "direct"
 ROUTING_KEY = "study.new"
@@ -23,17 +24,45 @@ def process_message(ch, method, properties, body):
         print(f"[RabbitMQ Consumer] Received new studyId: '{study_id}'")
         
         # Assemble standard inference payload object
+        # Note: Set callbackUrl=None so it doesn't trigger the REST webhook delivery
         payload_obj = InferencePayload(
             studyId=study_id,
-            callbackUrl=BACKEND_CALLBACK_URL
+            callbackUrl=None
         )
         
         # Directly invoke the existing prediction workflow in router.py
         response = predict(payload_obj)
 
         if response.status_code == 200:
+            # Parse response to get the file_id
+            res_data = json.loads(response.body.decode("utf-8"))
+            file_id = res_data.get("file_id")
+            
+            if not file_id:
+                raise ValueError("Prediction response did not return a valid file_id")
+
+            # Load the predictions file written by router.py
+            predictions_path = os.path.join(DICOM_TEMP_PATH, file_id, "predictions.json")
+            if not os.path.exists(predictions_path):
+                raise FileNotFoundError(f"Predictions file not found at path: {predictions_path}")
+                
+            with open(predictions_path, "r", encoding="utf-8") as f:
+                predictions = json.load(f)
+
+            # Cleanup the temp files and directories
+            try:
+                os.remove(predictions_path)
+                dir_path = os.path.join(DICOM_TEMP_PATH, file_id)
+                if os.path.exists(dir_path) and not os.listdir(dir_path):
+                    os.rmdir(dir_path)
+            except Exception as cleanup_err:
+                print(f"[RabbitMQ Consumer] Temp prediction folder cleanup error: {cleanup_err}")
+
+            # Publish the parsed predictions to RabbitMQ using the new producer
+            publish_result(study_id, predictions)
+
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            print(f"[RabbitMQ Consumer] Successfully processed studyId: '{study_id}'. Response: {response.body.decode('utf-8')}")
+            print(f"[RabbitMQ Consumer] Successfully processed and published results for studyId: '{study_id}'")
         else:
             print(f"[RabbitMQ Consumer] Inference failed with status {response.status_code}: {response.body.decode('utf-8')}. Requeuing message...")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
@@ -47,7 +76,6 @@ def process_message(ch, method, properties, body):
 
 def start_consumer():
     print(f"[RabbitMQ Consumer] Starting main consumer loop...")
-    print(f"[RabbitMQ Consumer] Backend Callback URL: {BACKEND_CALLBACK_URL}")
 
     while True:
         try:
