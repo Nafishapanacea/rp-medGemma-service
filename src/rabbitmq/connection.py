@@ -4,7 +4,7 @@ import os
 _connection = None
 _channel = None
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://localhost")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://admin:Test1234@localhost:5672/")
 
 def get_connection_and_channel():
     """
