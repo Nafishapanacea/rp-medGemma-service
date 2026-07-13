@@ -2,6 +2,7 @@ import pika
 import json
 import os
 import time
+from datetime import datetime, timezone
 from src.rabbitmq.connection import get_connection_and_channel, close_connection
 from src.rabbitmq.producer import publish_result
 from src.router.router import predict, InferencePayload
@@ -11,32 +12,66 @@ EXCHANGE_NAME = "study.aiexchange"
 EXCHANGE_TYPE = "direct"
 ROUTING_KEY = "study.new"
 QUEUE_NAME = "medgemma.study.queue"
+DLQ_NAME = "medgemma.study.dead.queue"
 
-def republish_and_ack(ch, method, body, reason: str) -> None:
+def handle_failure(ch, method, payload: dict, study_id: str, retry_count: int, error_message: str) -> None:
     """
-    Republishes the identical message back to the same exchange and routing key,
-    then ACKs the current message. This moves the item to the back of the queue
-    so other tasks can be processed.
+    Handles a processing failure:
+    - If retry_count < 3, increments retryCount and republishes to the study queue.
+    - If retry_count >= 3, publishes a detailed payload to the DLQ.
+    In both cases, ACKs the original message.
     """
     try:
-        print(f"[RabbitMQ Consumer] Re-queueing message to the back of the queue. Reason: {reason}")
-        
-        # Publish the same message to the same exchange and routing key
-        ch.basic_publish(
-            exchange=method.exchange,
-            routing_key=method.routing_key,
-            body=body,
-            properties=pika.BasicProperties(
-                delivery_mode=2,  # keep the message durable
-                content_type="application/json"
+        if retry_count < 3:
+            next_retry = retry_count + 1
+            print(f"[RabbitMQ Consumer] Attempt failed for studyId '{study_id}'. Retry count: {retry_count} (< 3). Incrementing to {next_retry} and republishing. Reason: {error_message}")
+            
+            payload["retryCount"] = next_retry
+            
+            # Republish the message. Prefer the exchange/routing key from the incoming message, or default to constants
+            exchange = method.exchange if method.exchange else EXCHANGE_NAME
+            routing_key = method.routing_key if method.routing_key else ROUTING_KEY
+            
+            ch.basic_publish(
+                exchange=exchange,
+                routing_key=routing_key,
+                body=json.dumps(payload),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # keep the message durable
+                    content_type="application/json"
+                )
             )
-        )
-        
-        # ACK the current message to remove it from the head of the queue
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-        print(f"[RabbitMQ Consumer] Re-queueing complete. Current message ACKed.")
-    except Exception as e:
-        print(f"[RabbitMQ Consumer] Failed to republish message: {str(e)}. Falling back to standard basic_nack.")
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            print(f"[RabbitMQ Consumer] Republish complete. Original message ACKed.")
+        else:
+            print(f"[RabbitMQ Consumer] Attempt failed for studyId '{study_id}'. Retry count: {retry_count} (>= 3). Moving to DLQ. Reason: {error_message}")
+            
+            dlq_payload = {
+                "studyId": study_id,
+                "retryCount": retry_count,
+                "errorMessage": error_message,
+                "failureTimestamp": datetime.now(timezone.utc).isoformat()
+            }
+            # Merge remaining keys from original payload
+            for k, v in payload.items():
+                if k not in dlq_payload:
+                    dlq_payload[k] = v
+                    
+            # Publish to medgemma.study.dead.queue via the default exchange ""
+            ch.basic_publish(
+                exchange="",
+                routing_key=DLQ_NAME,
+                body=json.dumps(dlq_payload),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # keep the message durable
+                    content_type="application/json"
+                )
+            )
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            print(f"[RabbitMQ Consumer] DLQ publish complete. Original message ACKed.")
+            
+    except Exception as err:
+        print(f"[RabbitMQ Consumer] Critical error in handle_failure: {err}. Falling back to standard basic_nack.")
         try:
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
         except Exception as nack_err:
@@ -45,14 +80,21 @@ def republish_and_ack(ch, method, body, reason: str) -> None:
 def process_message(ch, method, properties, body):
     try:
         payload = json.loads(body.decode("utf-8"))
-        study_id = payload.get("studyId")
-        if not study_id:
-            print("[RabbitMQ Consumer] Received invalid message payload: missing 'studyId'. Discarding (ACK).")
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            return
+    except Exception as json_err:
+        print(f"[RabbitMQ Consumer] Received malformed JSON payload. Discarding (ACK). Error: {json_err}")
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
 
-        print(f"[RabbitMQ Consumer] Received new studyId: '{study_id}'")
-        
+    study_id = payload.get("studyId")
+    if not study_id:
+        print("[RabbitMQ Consumer] Received invalid message payload: missing 'studyId'. Discarding (ACK).")
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
+
+    retry_count = payload.get("retryCount", 0)
+    print(f"[RabbitMQ Consumer] Received studyId: '{study_id}', retryCount: {retry_count}")
+    
+    try:
         # Assemble standard inference payload object
         # Note: Set callbackUrl=None so it doesn't trigger the REST webhook delivery
         payload_obj = InferencePayload(
@@ -98,12 +140,12 @@ def process_message(ch, method, properties, body):
             # Prediction failed (e.g., HTTP 503 Study not found or PACS unauthorized)
             error_msg = response.body.decode('utf-8')
             reason = f"Non-200 response status: {response.status_code} ({error_msg})"
-            republish_and_ack(ch, method, body, reason)
+            handle_failure(ch, method, payload, study_id, retry_count, reason)
 
     except Exception as e:
         # Unexpected exceptions during message processing (e.g. JSON parsing error, file errors)
         reason = f"Unexpected processing error: {str(e)}"
-        republish_and_ack(ch, method, body, reason)
+        handle_failure(ch, method, payload, study_id, retry_count, reason)
 
 def start_consumer():
     print(f"[RabbitMQ Consumer] Starting main consumer loop...")
@@ -119,8 +161,9 @@ def start_consumer():
                 durable=True
             )
 
-            # Declare durable queue
+            # Declare durable queues
             channel.queue_declare(queue=QUEUE_NAME, durable=True)
+            channel.queue_declare(queue=DLQ_NAME, durable=True)
 
             # Bind queue to exchange using the routing key
             channel.queue_bind(
