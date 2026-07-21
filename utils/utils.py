@@ -385,22 +385,67 @@ def report_to_json(report, modality, known_body_part=None):
 
 
 
+# def extract_body_part_from_dicom(first_file_path):
+#     """
+#     Attempts to read metadata tags (0018,0015), (0008,0104), and (0008,1030).
+#     Runs the values through a regex matching layout to return a matched label.
+#     """
+#     try:
+#         ds = pydicom.dcmread(first_file_path, stop_before_pixels=True)
+        
+#         # Pull text components from fallback attributes safely
+#         candidates = [
+#             str(getattr(ds, 'BodyPartExamined', '')),
+#             str(ds.get((0x0008, 0x0104), {}).get('value', '')), # Code Meaning
+#             str(getattr(ds, 'StudyDescription', ''))
+#         ]
+        
+#         combined_text = " ".join(candidates).lower()
+#         if not combined_text.strip():
+#             return None
+            
+#         # Match using the full anatomical coverage array map
+#         for label, patterns in BODY_PART_RE_MAP.items():
+#             for pattern in patterns:
+#                 if re.search(pattern, combined_text):
+#                     return label
+#     except Exception:
+#         pass
+#     return None
+
+# import pydicom
+# import re
+
 def extract_body_part_from_dicom(first_file_path):
     """
-    Attempts to read metadata tags (0018,0015), (0008,0104), and (0008,1030).
+    Attempts to read metadata tags:
+    - (0018,0015) Body Part Examined
+    - (0008,1030) Study Description
+    - (0018,1030) Protocol Name 
+    - (0008,0104) Code Meaning
     Runs the values through a regex matching layout to return a matched label.
     """
     try:
         ds = pydicom.dcmread(first_file_path, stop_before_pixels=True)
         
-        # Pull text components from fallback attributes safely
+        # Pull text components from all potential metadata tags safely
         candidates = [
-            str(getattr(ds, 'BodyPartExamined', '')),
-            str(ds.get((0x0008, 0x0104), {}).get('value', '')), # Code Meaning
-            str(getattr(ds, 'StudyDescription', ''))
+            str(getattr(ds, 'BodyPartExamined', '')),  # (0018,0015) e.g., "CHEST"
+            str(getattr(ds, 'StudyDescription', '')),  # (0008,1030)
+            str(getattr(ds, 'ProtocolName', ''))       # (0018,1030) e.g., "6.3 Abdomen Routine AIIA"
         ]
         
+        # Handle Code Meaning (0008, 0104) 
+        # Using getattr is safer, but we'll include your manual hex lookup as a fallback
+        code_meaning = getattr(ds, 'CodeMeaning', '')
+        if not code_meaning and (0x0008, 0x0104) in ds:
+            code_meaning = str(ds[(0x0008, 0x0104)].value)
+        candidates.append(code_meaning)
+        
+        # Combine all found text into one searchable lowercase string
+        # e.g., "chest  6.3 abdomen routine aiia "
         combined_text = " ".join(candidates).lower()
+        
         if not combined_text.strip():
             return None
             
@@ -409,10 +454,13 @@ def extract_body_part_from_dicom(first_file_path):
             for pattern in patterns:
                 if re.search(pattern, combined_text):
                     return label
-    except Exception:
+                    
+    except Exception as e:
+        # It is usually a good idea to log the error during development
+        # print(f"Error reading DICOM: {e}") 
         pass
+        
     return None
-
 
 def extract_body_part_from_text_fallback(report_text):
     """Fallback parser to uncover the targeted anatomy from raw prose text."""
@@ -424,3 +472,70 @@ def extract_body_part_from_text_fallback(report_text):
     return "unknown"
 
 
+
+# ---------------------------------------------------------
+# NEW: DEDICATED ABDOMEN CT PREPROCESSING
+# ---------------------------------------------------------
+
+def window_abdomen(ct_vol):
+    """
+    Applies 3 specific windows optimized for Abdominal/Pelvic CTs:
+    1. Soft Tissue Window (W:400, L:50) -> Range: -150 to 250
+    2. Liver Window (W:150, L:30) -> Range: -45 to 105
+    3. Wide/Bone Window (W:2000, L:400) -> Range: -600 to 1400
+    """
+    window_clips = [(-150, 250), (-45, 105), (-600, 1400)]
+    return np.stack([norm(ct_vol, clip[0], clip[1]) for clip in window_clips], axis=-1)
+
+def normalize_abdomen_ct_slices(ct_volume_slices):
+    normalized_abdomen_slices = []
+    for ct_slice in ct_volume_slices:
+        windowed_slice = window_abdomen(ct_slice)
+        windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
+        normalized_abdomen_slices.append(windowed_slice)
+    return normalized_abdomen_slices
+
+def select_slices_abdomen(dicom_slices):
+    """
+    KUB Logic: Takes a solid block of 50 contiguous slices to ensure 
+    tiny calculi (stones) are not skipped over.
+    """
+    MAX_SLICES = 50
+    if len(dicom_slices) > MAX_SLICES:
+        # Start 1/3 of the way down to target the kidneys/ureters
+        start_idx = len(dicom_slices) // 3
+        end_idx = start_idx + MAX_SLICES
+        return dicom_slices[start_idx:end_idx]
+        
+    return dicom_slices
+
+def preprocess_abdomen_ct(dicom_files):
+    slices = [pydicom.dcmread(f) for f in dicom_files]
+    
+    # Sort slices anatomically
+    if hasattr(slices[0], "ImagePositionPatient"):
+        slices.sort(key=lambda s: float(s.ImagePositionPatient[2]))
+    elif hasattr(slices[0], "InstanceNumber"):
+        slices.sort(key=lambda s: int(s.InstanceNumber))
+
+    ct_volume_slices  = []
+    for ds in slices:
+        ct_volume_slices.append(pydicom.pixels.apply_rescale(ds.pixel_array, ds))
+
+    normalized_ct_slices = normalize_abdomen_ct_slices(ct_volume_slices)
+    return normalized_ct_slices
+
+def prepare_message_ct_abdomen(dicom_files, prompt):
+    content = []
+    content.append({"type": "text", "text": prompt})
+
+    # Use the new abdomen-specific preprocessing and selection
+    normalized_ct_slices = preprocess_abdomen_ct(dicom_files)
+    normalized_ct_slices = select_slices_abdomen(normalized_ct_slices)
+    
+    for slice_idx, slice_img in enumerate(normalized_ct_slices, start=1):
+        content.append({"type": "image", "image": encode_slice(slice_img)})
+        content.append({"type": "text", "text": f"SLICE {slice_idx}"})
+        
+    messages = [{"role": "user", "content": content}]
+    return messages

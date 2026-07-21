@@ -10,8 +10,8 @@ import requests
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
-from utils.prompt import x_ray_prompt, mri_prompt, ct_prompt, get_production_super_prompt_auto
-from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct, report_to_json,download_study_zip, get_best_image_series, extract_body_part_from_dicom
+from utils.prompt import x_ray_prompt, mri_prompt, ct_prompt, get_production_super_prompt_auto,ct_chest_prompt,ct_abdomen_prompt
+from utils.utils import check_modality, dicom_to_image, run_medgemma_xray, prepare_message_mr, run_medgemma_mr, prepare_message_ct, run_medgemma_ct, report_to_json,download_study_zip, get_best_image_series, extract_body_part_from_dicom, prepare_message_ct_abdomen
 from src.configuration.config import DICOM_TEMP_PATH
 
 router = APIRouter()
@@ -79,6 +79,18 @@ def predict(
                 
                 if meta_body_part == "chest":
                     model_response = run_medgemma_xray(output_path, x_ray_prompt)
+                    
+                    # 🛠️ FIX: Assign the 'response' variable here so it doesn't error out later
+                    if isinstance(model_response, dict):
+                        response = {
+                            "normal": model_response.get("Normal") if "Normal" in model_response else model_response.get("normal", True),
+                            "abnormality": model_response.get("abnormality", []),
+                            "body_part": meta_body_part or model_response.get("body_part", "chest"),
+                            "finding": model_response.get("finding", "")
+                        }
+                    else:
+                        response = report_to_json(model_response, modality, meta_body_part)
+                        
                 else:
                     model_response = run_medgemma_xray(output_path, fallback_prompt)
                     
@@ -110,15 +122,33 @@ def predict(
                 print("MR response-->", response)
                 
             # ── 3. COMPUTED TOMOGRAPHY HANDLING (CT) ─────────────────────
+            # elif (modality == 'CT'):
+            #     if meta_body_part in ["head", "brain"]:
+            #         # Matches our explicit profile
+            #         message = prepare_message_ct(file_paths, ct_prompt)
+            #     else:
+            #         # Fallback to the auto-detect super prompt
+            #         message = prepare_message_ct(file_paths, fallback_prompt)
+                    
+            #     model_response = run_medgemma_ct(message)
+            #     response = report_to_json(model_response, modality, meta_body_part)
+            #     print("CT response-->", response)
+            # ── 3. COMPUTED TOMOGRAPHY HANDLING (CT) ─────────────────────
             elif (modality == 'CT'):
+                # Route based on the extracted metadata body part
                 if meta_body_part in ["head", "brain"]:
-                    # Matches our explicit profile
                     message = prepare_message_ct(file_paths, ct_prompt)
+                elif meta_body_part in ["chest", "thorax", "lung", "lungs"]:
+                    message = prepare_message_ct(file_paths, ct_chest_prompt)
+                elif meta_body_part in ["abdomen", "pelvis", "abdo", "abd"]:
+                    message = prepare_message_ct_abdomen(file_paths, ct_abdomen_prompt)
                 else:
                     # Fallback to the auto-detect super prompt
                     message = prepare_message_ct(file_paths, fallback_prompt)
                     
                 model_response = run_medgemma_ct(message)
+                
+                # ⚠️ See note below regarding JSON parsing
                 response = report_to_json(model_response, modality, meta_body_part)
                 print("CT response-->", response)
                 
