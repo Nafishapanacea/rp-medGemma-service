@@ -1,9 +1,10 @@
 import uvicorn
 from fastapi import FastAPI
-from src.router.router import router   
+ 
 from dotenv import load_dotenv
 
 load_dotenv()
+from src.router.router import router  
 app = FastAPI(title="Medgemma service")
 
 app.include_router(router)
